@@ -1,0 +1,700 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local MinimalLib = {
+    Connections = {},
+    Flags = {},
+    Folder = nil,
+    SaveCfg = false
+}
+
+local function AddConnection(signal, func)
+    local c = signal:Connect(func)
+    table.insert(MinimalLib.Connections, c)
+    return c
+end
+
+local function Create(inst, props, children)
+    local obj = Instance.new(inst)
+    for i, v in pairs(props or {}) do
+        obj[i] = v
+    end
+    for _, v in ipairs(children or {}) do
+        v.Parent = obj
+    end
+    return obj
+end
+
+local function MakeDraggable(topBar, main)
+    local dragging, dragInput, startPos, startMousePos
+
+    topBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            startMousePos = input.Position
+            startPos = main.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    topBar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - startMousePos
+            main.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+-- ===== Сохранение/загрузка (минимально) =====
+
+local HttpService = game:GetService("HttpService")
+
+local function PackColor(c)
+    return {R = c.R * 255, G = c.G * 255, B = c.B * 255}
+end
+
+local function UnpackColor(t)
+    return Color3.fromRGB(t.R, t.G, t.B)
+end
+
+local function LoadCfg(str)
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(str)
+    end)
+    if not ok then return end
+
+    for flagName, value in pairs(data) do
+        local obj = MinimalLib.Flags[flagName]
+        if obj and obj.Set then
+            if obj.Type == "Colorpicker" then
+                obj:Set(UnpackColor(value))
+            else
+                obj:Set(value)
+            end
+        end
+    end
+end
+
+local function SaveCfg(name)
+    if not MinimalLib.SaveCfg or not MinimalLib.Folder then return end
+
+    local data = {}
+    for flagName, obj in pairs(MinimalLib.Flags) do
+        if obj.Save then
+            if obj.Type == "Colorpicker" then
+                data[flagName] = PackColor(obj.Value)
+            else
+                data[flagName] = obj.Value
+            end
+        end
+    end
+
+    local encoded = HttpService:JSONEncode(data)
+    writefile(MinimalLib.Folder .. "/" .. name .. ".txt", encoded)
+end
+
+-- ===== Базовый GUI =====
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MinimalUI"
+
+if syn and syn.protect_gui then
+    syn.protect_gui(ScreenGui)
+    ScreenGui.Parent = game.CoreGui
+else
+    local ok, ui = pcall(function() return gethui() end)
+    if ok and ui then
+        ScreenGui.Parent = ui
+    else
+        ScreenGui.Parent = game.CoreGui
+    end
+end
+
+-- Убираем дубликаты
+for _, v in ipairs(ScreenGui.Parent:GetChildren()) do
+    if v.Name == ScreenGui.Name and v ~= ScreenGui then
+        v:Destroy()
+    end
+end
+
+-- ===== API =====
+
+function MinimalLib:Init()
+    if not self.SaveCfg or not self.Folder then return end
+
+    local path = self.Folder .. "/" .. game.GameId .. ".txt"
+    if isfile and isfile(path) then
+        local ok, content = pcall(readfile, path)
+        if ok then
+            LoadCfg(content)
+        end
+    end
+end
+
+function MinimalLib:MakeWindow(cfg)
+    cfg = cfg or {}
+    cfg.Name = cfg.Name or "Minimal UI"
+    cfg.ConfigFolder = cfg.ConfigFolder or cfg.Name
+    cfg.SaveConfig = cfg.SaveConfig or false
+    cfg.KeyToggle = cfg.KeyToggle or Enum.KeyCode.RightShift
+
+    MinimalLib.Folder = cfg.ConfigFolder
+    MinimalLib.SaveCfg = cfg.SaveConfig
+
+    if cfg.SaveConfig then
+        if not isfolder(cfg.ConfigFolder) then
+            makefolder(cfg.ConfigFolder)
+        end
+    end
+
+    local Window = {}
+    local Tabs = {}
+    local CurrentTab = nil
+    local Hidden = false
+
+    -- Основное окно
+    local MainFrame = Create("Frame", {
+        Parent = ScreenGui,
+        Size = UDim2.new(0, 520, 0, 320),
+        Position = UDim2.new(0.5, -260, 0.5, -160),
+        BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+        BorderSizePixel = 0
+    }, {
+        Create("UICorner", {CornerRadius = UDim.new(0, 8)}),
+        Create("UIStroke", {
+            Thickness = 1,
+            Color = Color3.fromRGB(50, 50, 50)
+        })
+    })
+
+    local TopBar = Create("Frame", {
+        Parent = MainFrame,
+        Size = UDim2.new(1, 0, 0, 32),
+        BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+        BorderSizePixel = 0
+    }, {
+        Create("UICorner", {CornerRadius = UDim.new(0, 8)})
+    })
+
+    local Title = Create("TextLabel", {
+        Parent = TopBar,
+        Size = UDim2.new(1, -60, 1, 0),
+        Position = UDim2.new(0, 10, 0, 0),
+        Text = cfg.Name,
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 15,
+        TextColor3 = Color3.fromRGB(230, 230, 230),
+        BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left
+    })
+
+    local CloseBtn = Create("TextButton", {
+        Parent = TopBar,
+        Size = UDim2.new(0, 24, 0, 24),
+        Position = UDim2.new(1, -28, 0.5, -12),
+        Text = "×",
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 18,
+        TextColor3 = Color3.fromRGB(180, 180, 180),
+        BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+        BorderSizePixel = 0
+    }, {
+        Create("UICorner", {CornerRadius = UDim.new(1, 0)})
+    })
+
+    local TabList = Create("Frame", {
+        Parent = MainFrame,
+        Size = UDim2.new(0, 120, 1, -32),
+        Position = UDim2.new(0, 0, 0, 32),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+        BorderSizePixel = 0
+    }, {
+        Create("UICorner", {CornerRadius = UDim.new(0, 8)}),
+        Create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Vertical,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Padding = UDim.new(0, 4)
+        }),
+        Create("UIPadding", {
+            PaddingTop = UDim.new(0, 6),
+            PaddingLeft = UDim.new(0, 6),
+            PaddingRight = UDim.new(0, 6)
+        })
+    })
+
+    local ContentHolder = Create("Frame", {
+        Parent = MainFrame,
+        Size = UDim2.new(1, -120, 1, -32),
+        Position = UDim2.new(0, 120, 0, 32),
+        BackgroundColor3 = Color3.fromRGB(18, 18, 18),
+        BorderSizePixel = 0
+    }, {
+        Create("UICorner", {CornerRadius = UDim.new(0, 8)})
+    })
+
+    MakeDraggable(TopBar, MainFrame)
+
+    -- скрытие по клавише
+    AddConnection(UserInputService.InputBegan, function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == cfg.KeyToggle then
+            Hidden = not Hidden
+            MainFrame.Visible = not Hidden
+        end
+    end)
+
+    AddConnection(CloseBtn.MouseButton1Click, function()
+        MainFrame.Visible = false
+        Hidden = true
+    end)
+
+    -- === Табы ===
+
+    function Window:MakeTab(tabCfg)
+        tabCfg = tabCfg or {}
+        tabCfg.Name = tabCfg.Name or "Tab"
+
+        local Tab = {}
+        local ElementsFrame
+        local List
+        local Scroll
+
+        -- кнопка таба
+        local TabButton = Create("TextButton", {
+            Parent = TabList,
+            Size = UDim2.new(1, 0, 0, 26),
+            Text = tabCfg.Name,
+            Font = Enum.Font.GothamSemibold,
+            TextSize = 13,
+            TextColor3 = Color3.fromRGB(170, 170, 170),
+            BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+            BorderSizePixel = 0
+        }, {
+            Create("UICorner", {CornerRadius = UDim.new(0, 6)})
+        })
+
+        -- контейнер
+        Scroll = Create("ScrollingFrame", {
+            Parent = ContentHolder,
+            Size = UDim2.new(1, 0, 1, 0),
+            CanvasSize = UDim2.new(0, 0, 0, 0),
+            ScrollBarThickness = 4,
+            ScrollBarImageColor3 = Color3.fromRGB(70, 70, 70),
+            BackgroundTransparency = 1,
+            Visible = false
+        })
+
+        List = Create("UIListLayout", {
+            Parent = Scroll,
+            FillDirection = Enum.FillDirection.Vertical,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Padding = UDim.new(0, 6)
+        })
+
+        Create("UIPadding", {
+            Parent = Scroll,
+            PaddingTop = UDim.new(0, 8),
+            PaddingLeft = UDim.new(0, 8),
+            PaddingRight = UDim.new(0, 8),
+            PaddingBottom = UDim.new(0, 8)
+        })
+
+        AddConnection(List:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+            Scroll.CanvasSize = UDim2.new(0, 0, 0, List.AbsoluteContentSize.Y + 10)
+        end)
+
+        local function SetCurrent()
+            if CurrentTab == Tab then return end
+            CurrentTab = Tab
+
+            for _, t in ipairs(Tabs) do
+                t.Scroll.Visible = false
+                TweenService:Create(
+                    t.Button,
+                    TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                    {BackgroundColor3 = Color3.fromRGB(24, 24, 24), TextColor3 = Color3.fromRGB(150, 150, 150)}
+                ):Play()
+            end
+
+            Scroll.Visible = true
+            TweenService:Create(
+                TabButton,
+                TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                {BackgroundColor3 = Color3.fromRGB(40, 40, 40), TextColor3 = Color3.fromRGB(230, 230, 230)}
+            ):Play()
+        end
+
+        AddConnection(TabButton.MouseButton1Click, SetCurrent)
+
+        Tab.Button = TabButton
+        Tab.Scroll = Scroll
+        table.insert(Tabs, Tab)
+
+        if not CurrentTab then
+            SetCurrent()
+        end
+
+        -- ===== Элементы =====
+
+        local function AddBaseFrame(height)
+            local f = Create("Frame", {
+                Parent = Scroll,
+                Size = UDim2.new(1, 0, 0, height or 34),
+                BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+                BorderSizePixel = 0
+            }, {
+                Create("UICorner", {CornerRadius = UDim.new(0, 6)}),
+                Create("UIStroke", {
+                    Color = Color3.fromRGB(40, 40, 40),
+                    Thickness = 1
+                })
+            })
+            return f
+        end
+
+        function Tab:AddLabel(text)
+            local frame = AddBaseFrame(30)
+            Create("TextLabel", {
+                Parent = frame,
+                Size = UDim2.new(1, -12, 1, 0),
+                Position = UDim2.new(0, 6, 0, 0),
+                Text = text or "Label",
+                Font = Enum.Font.GothamSemibold,
+                TextSize = 14,
+                TextColor3 = Color3.fromRGB(210, 210, 210),
+                BackgroundTransparency = 1,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+            local obj = {}
+            function obj:Set(v)
+                frame:FindFirstChildOfClass("TextLabel").Text = v
+            end
+            return obj
+        end
+
+        function Tab:AddButton(cfgBtn)
+            cfgBtn = cfgBtn or {}
+            cfgBtn.Name = cfgBtn.Name or "Button"
+            cfgBtn.Callback = cfgBtn.Callback or function() end
+
+            local frame = AddBaseFrame(30)
+            local label = Create("TextLabel", {
+                Parent = frame,
+                Size = UDim2.new(1, -12, 1, 0),
+                Position = UDim2.new(0, 6, 0, 0),
+                Text = cfgBtn.Name,
+                Font = Enum.Font.GothamSemibold,
+                TextSize = 14,
+                TextColor3 = Color3.fromRGB(210, 210, 210),
+                BackgroundTransparency = 1,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local btn = Create("TextButton", {
+                Parent = frame,
+                Size = UDim2.new(1, 0, 1, 0),
+                Text = "",
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0
+            })
+
+            AddConnection(btn.MouseButton1Click, function()
+                TweenService:Create(
+                    frame,
+                    TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                    {BackgroundColor3 = Color3.fromRGB(30, 30, 30)}
+                ):Play()
+                task.delay(0.1, function()
+                    TweenService:Create(
+                        frame,
+                        TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                        {BackgroundColor3 = Color3.fromRGB(24, 24, 24)}
+                    ):Play()
+                end)
+                task.spawn(cfgBtn.Callback)
+            end)
+
+            local obj = {}
+            function obj:Set(newName)
+                label.Text = newName
+            end
+            return obj
+        end
+
+        function Tab:AddToggle(cfgT)
+            cfgT = cfgT or {}
+            cfgT.Name = cfgT.Name or "Toggle"
+            cfgT.Default = cfgT.Default or false
+            cfgT.Callback = cfgT.Callback or function() end
+            cfgT.Flag = cfgT.Flag or nil
+            cfgT.Save = cfgT.Save or false
+
+            local Toggle = {
+                Value = cfgT.Default,
+                Save = cfgT.Save,
+                Type = "Toggle"
+            }
+
+            local frame = AddBaseFrame(30)
+
+            local label = Create("TextLabel", {
+                Parent = frame,
+                Size = UDim2.new(1, -40, 1, 0),
+                Position = UDim2.new(0, 6, 0, 0),
+                Text = cfgT.Name,
+                Font = Enum.Font.GothamSemibold,
+                TextSize = 14,
+                TextColor3 = Color3.fromRGB(210, 210, 210),
+                BackgroundTransparency = 1,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local box = Create("Frame", {
+                Parent = frame,
+                Size = UDim2.new(0, 18, 0, 18),
+                Position = UDim2.new(1, -22, 0.5, -9),
+                BackgroundColor3 = Color3.fromRGB(34, 34, 34),
+                BorderSizePixel = 0
+            }, {
+                Create("UICorner", {CornerRadius = UDim.new(0, 4)}),
+                Create("UIStroke", {
+                    Color = Color3.fromRGB(70, 70, 70),
+                    Thickness = 1
+                })
+            })
+
+            local dot = Create("Frame", {
+                Parent = box,
+                Size = UDim2.new(0, 10, 0, 10),
+                Position = UDim2.new(0.5, -5, 0.5, -5),
+                BackgroundColor3 = Color3.fromRGB(0, 170, 255),
+                BorderSizePixel = 0,
+                Visible = false
+            }, {
+                Create("UICorner", {CornerRadius = UDim.new(1, 0)})
+            })
+
+            local click = Create("TextButton", {
+                Parent = frame,
+                Size = UDim2.new(1, 0, 1, 0),
+                Text = "",
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0
+            })
+
+            function Toggle:Set(val)
+                Toggle.Value = not not val
+                dot.Visible = Toggle.Value
+                cfgT.Callback(Toggle.Value)
+            end
+
+            AddConnection(click.MouseButton1Click, function()
+                Toggle:Set(not Toggle.Value)
+                SaveCfg(game.GameId)
+            end)
+
+            Toggle:Set(Toggle.Value)
+
+            if cfgT.Flag then
+                MinimalLib.Flags[cfgT.Flag] = Toggle
+            end
+
+            return Toggle
+        end
+
+        function Tab:AddSlider(cfgS)
+            cfgS = cfgS or {}
+            cfgS.Name = cfgS.Name or "Slider"
+            cfgS.Min = cfgS.Min or 0
+            cfgS.Max = cfgS.Max or 100
+            cfgS.Default = cfgS.Default or cfgS.Min
+            cfgS.Increment = cfgS.Increment or 1
+            cfgS.ValueName = cfgS.ValueName or ""
+            cfgS.Callback = cfgS.Callback or function() end
+            cfgS.Flag = cfgS.Flag or nil
+            cfgS.Save = cfgS.Save or false
+
+            local Slider = {
+                Value = cfgS.Default,
+                Save = cfgS.Save,
+                Type = "Slider"
+            }
+
+            local frame = AddBaseFrame(52)
+
+            local label = Create("TextLabel", {
+                Parent = frame,
+                Size = UDim2.new(1, -12, 0, 18),
+                Position = UDim2.new(0, 6, 0, 4),
+                Text = cfgS.Name,
+                Font = Enum.Font.GothamSemibold,
+                TextSize = 14,
+                TextColor3 = Color3.fromRGB(210, 210, 210),
+                BackgroundTransparency = 1,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local valueLabel = Create("TextLabel", {
+                Parent = frame,
+                Size = UDim2.new(1, -12, 0, 16),
+                Position = UDim2.new(0, 6, 0, 24),
+                Text = "",
+                Font = Enum.Font.Gotham,
+                TextSize = 13,
+                TextColor3 = Color3.fromRGB(150, 150, 150),
+                BackgroundTransparency = 1,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local bar = Create("Frame", {
+                Parent = frame,
+                Size = UDim2.new(1, -12, 0, 4),
+                Position = UDim2.new(0, 6, 1, -10),
+                BackgroundColor3 = Color3.fromRGB(34, 34, 34),
+                BorderSizePixel = 0
+            }, {
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            local fill = Create("Frame", {
+                Parent = bar,
+                Size = UDim2.new(0, 0, 1, 0),
+                BackgroundColor3 = Color3.fromRGB(0, 170, 255),
+                BorderSizePixel = 0
+            }, {
+                Create("UICorner", {CornerRadius = UDim.new(0, 3)})
+            })
+
+            local dragging = false
+
+            local function Round(n, inc)
+                return math.floor(n / inc + 0.5) * inc
+            end
+
+            function Slider:Set(val)
+                val = math.clamp(Round(val, cfgS.Increment), cfgS.Min, cfgS.Max)
+                self.Value = val
+
+                local alpha = (val - cfgS.Min) / (cfgS.Max - cfgS.Min)
+                fill.Size = UDim2.new(alpha, 0, 1, 0)
+
+                valueLabel.Text = tostring(val) .. (cfgS.ValueName ~= "" and (" " .. cfgS.ValueName) or "")
+                cfgS.Callback(val)
+            end
+
+            AddConnection(bar.InputBegan, function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    dragging = true
+                end
+            end)
+
+            AddConnection(bar.InputEnded, function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    dragging = false
+                    SaveCfg(game.GameId)
+                end
+            end)
+
+            AddConnection(UserInputService.InputChanged, function(input)
+                if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                    local rel = math.clamp((input.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+                    local val = cfgS.Min + (cfgS.Max - cfgS.Min) * rel
+                    Slider:Set(val)
+                end
+            end)
+
+            Slider:Set(Slider.Value)
+
+            if cfgS.Flag then
+                MinimalLib.Flags[cfgS.Flag] = Slider
+            end
+
+            return Slider
+        end
+
+        function Tab:AddTextbox(cfgT)
+            cfgT = cfgT or {}
+            cfgT.Name = cfgT.Name or "Textbox"
+            cfgT.Default = cfgT.Default or ""
+            cfgT.TextDisappear = cfgT.TextDisappear or false
+            cfgT.Callback = cfgT.Callback or function() end
+
+            local frame = AddBaseFrame(30)
+
+            local label = Create("TextLabel", {
+                Parent = frame,
+                Size = UDim2.new(0.5, -6, 1, 0),
+                Position = UDim2.new(0, 6, 0, 0),
+                Text = cfgT.Name,
+                Font = Enum.Font.GothamSemibold,
+                TextSize = 14,
+                TextColor3 = Color3.fromRGB(210, 210, 210),
+                BackgroundTransparency = 1,
+                TextXAlignment = Enum.TextXAlignment.Left
+            })
+
+            local box = Create("TextBox", {
+                Parent = frame,
+                Size = UDim2.new(0.5, -10, 1, -6),
+                Position = UDim2.new(0.5, 4, 0, 3),
+                Text = cfgT.Default,
+                Font = Enum.Font.Gotham,
+                TextSize = 14,
+                TextColor3 = Color3.fromRGB(220, 220, 220),
+                PlaceholderText = "",
+                BackgroundColor3 = Color3.fromRGB(20, 20, 20),
+                BorderSizePixel = 0,
+                ClearTextOnFocus = false
+            }, {
+                Create("UICorner", {CornerRadius = UDim.new(0, 4)})
+            })
+
+            AddConnection(box.FocusLost, function(enter)
+                cfgT.Callback(box.Text)
+                if cfgT.TextDisappear then
+                    box.Text = ""
+                end
+            end)
+
+            local obj = {}
+            function obj:Set(text)
+                box.Text = text
+            end
+            return obj
+        end
+
+        return Tab
+    end
+
+    return Window
+end
+
+function MinimalLib:Destroy()
+    for _, c in ipairs(self.Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    if ScreenGui then
+        ScreenGui:Destroy()
+    end
+end
+
+return MinimalLib
