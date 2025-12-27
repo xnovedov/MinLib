@@ -7,7 +7,7 @@
 ## Подключение
 
 ```lua
-local MinimalLib = loadstring(game:HttpGet("ВАША_ССЫЛКА"))()
+local MinimalLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/xnovedov/MinLib/refs/heads/main/source"))()
 ```
 
 ---
